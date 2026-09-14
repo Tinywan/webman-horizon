@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Webman Horizon</title>
+  <script>
+    // 防 FOUC：应用挂载前根据 localStorage / 系统偏好设置主题与语言
+    (function () {
+      try {
+        var theme = localStorage.getItem('horizon-theme') || 'system';
+        var dark =
+          theme === 'dark' ||
+          (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        if (dark) document.documentElement.classList.add('dark');
+        var locale = localStorage.getItem('horizon-locale');
+        if (locale) document.documentElement.lang = locale;
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body class="min-h-screen font-sans antialiased">
+  <div id="app"></div>
+  <script type="module" src="/resources/js/app.js"></script>
+</body>
+</html>
