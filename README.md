@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Tinywan/webman-horizon/releases"><img src="https://img.shields.io/github/v/release/Tinywan/webman-horizon?color=blue" alt="Latest Version"></a>
+  <a href="https://packagist.org/packages/tinywan/webman-horizon"><img src="https://img.shields.io/packagist/v/tinywan/webman-horizon?color=blue&label=version" alt="Latest Version"></a>
   <a href="https://php.net"><img src="https://img.shields.io/badge/php-%3E%3D8.2-8892BF.svg" alt="PHP Version"></a>
   <a href="https://www.workerman.net/doc/webman/app/app.html"><img src="https://img.shields.io/badge/webman-app--plugin-success.svg" alt="Webman App Plugin"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-brightgreen.svg" alt="License"></a>
