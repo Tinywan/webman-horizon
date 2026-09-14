@@ -29,9 +29,12 @@ class QueueManager
         // const QUEUE_WAITING = '{redis-queue}-waiting';
         // const QUEUE_DELAYED = '{redis-queue}-delayed';
         // const QUEUE_FAILED  = '{redis-queue}-failed';
-        $userPrefix = $prefix ?? $config['prefix'] ?? '';
-        if ($userPrefix && !str_ends_with($userPrefix, '-')) {
-            $userPrefix .= '-';
+        // 如果配置的是默认的 'redis-queue' 或留空，则直接使用底层的 '{redis-queue}'
+        $customPrefix = $prefix ?? $config['prefix'] ?? '';
+        if ($customPrefix === 'redis-queue' || $customPrefix === '{redis-queue}' || empty($customPrefix)) {
+            $userPrefix = '';
+        } else {
+            $userPrefix = str_ends_with($customPrefix, '-') ? $customPrefix : $customPrefix . '-';
         }
 
         $this->waitingPrefix = $userPrefix . '{redis-queue}-waiting';
