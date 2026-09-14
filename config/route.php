@@ -38,6 +38,7 @@ Route::group('/app/horizon/api', function () {
     AuthMiddleware::class,
 ]);
 
-// 2. 监控面板 SPA 页面入口及前端子路由支持（必须排除 api 前缀，避免遮蔽 API 路由）
+// 2. 监控面板 SPA 页面入口及前端子路由支持
 Route::get('/app/horizon', [IndexController::class, 'index']);
-Route::get('/app/horizon/{path:^(?!api/).*$}', [IndexController::class, 'index']);
+Route::get('/app/horizon/{view:dashboard|monitoring|metrics|recent-jobs|failed-jobs|batches}', [IndexController::class, 'index']);
+
