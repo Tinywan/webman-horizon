@@ -1,7 +1,7 @@
 # Webman Horizon (Redis 队列监控面板)
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/laravel/horizon/11.x/art/readme-showcase.png" alt="Webman Horizon" width="800">
+  <img src="https://laravel.com/img/docs/horizon-example.png" alt="Webman Horizon" width="800">
 </p>
 
 <p align="center">
@@ -53,6 +53,8 @@
 composer require tinywan/webman-horizon
 ```
 
+安装完成后，Webman 会自动将插件配置文件与静态资源初始化到主项目的 `plugin/horizon/` 目录下。
+
 ### 2. 访问监控面板
 
 启动 Webman 服务：
@@ -61,6 +63,8 @@ composer require tinywan/webman-horizon
 php start.php start
 # 或使用调试模式
 php start.php start -d
+# Windows 环境
+php windows.php
 ```
 
 打开浏览器直接访问（符合 Webman 官方应用插件标准规范）：
@@ -71,51 +75,114 @@ http://127.0.0.1:8787/app/horizon
 
 ---
 
-## 配置文件说明
+## 核心配置说明
 
-安装后，插件配置文件位于主项目的 `config/plugin/horizon/` 目录下（支持在主项目中覆盖自定义）：
-
-### `config/plugin/horizon/app.php`
+### 1. 基础配置文件 `plugin/horizon/config/app.php`
 
 ```php
 return [
+    // 插件总开关
     'enable' => true,
-    'path' => '/app/horizon', // 面板访问入口路径
 
-    // 访问鉴权 (生产环境建议开启)
+    // 调试模式 (必须为 bool 类型，供 Webman 依赖注入解析器使用)
+    'debug' => true,
+
+    // 面板访问入口路径 (默认为 /app/horizon，可自定义如 /horizon)
+    'path' => '/app/horizon',
+
+    // 绑定域名 (可选，留空 null 表示不限制域名)
+    'domain' => null,
+
+    // 访问鉴权 (生产环境强烈建议开启)
     'auth' => [
-        'enabled' => false,
-        'username' => 'admin',
-        'password' => 'admin123',
+        'enabled' => false,       // 是否开启 HTTP Basic 认证
+        'username' => 'admin',    // 登录用户名
+        'password' => 'admin123', // 登录密码
     ],
 
-    // Redis 队列驱动连接与前缀 (需与 webman/redis-queue 保持一致)
+    // Redis 队列驱动连接与前缀
     'redis' => [
-        'connection' => 'default',
-        'prefix' => 'redis-queue',
+        'connection' => 'default', // 对应 config/plugin/webman/redis-queue/redis.php 中的连接名
+        'prefix' => 'redis-queue', // 队列前缀 (默认留空或 redis-queue 即可，与 webman/redis-queue 保持一致)
     ],
 
-    // 指标归档与保留时长配置
+    // 指标采集与保留配置
     'metrics' => [
         'trim_snapshots' => [
-            'recent' => 2880, // 分钟级统计数据在 Redis 中的保留时间 (分钟，默认48小时自动淘汰)
+            'recent' => 2880,      // 分钟级采样数据保留时长 (分钟，默认48小时自动淘汰)
         ],
     ],
 ];
 ```
 
-### `config/plugin/horizon/process.php`
+---
 
-应用插件内置了后台常驻维护进程，负责定时采样吞吐率与自动维护 Redis 过期 Key：
+### 2. 开启 100% 全局无感吞吐量与耗时统计（强烈推荐）
+
+想要在 Horizon 面板中看到**吞吐量走势图（Throughput）**与**作业单次执行平均耗时（Runtime）**，消费者需要在执行时进行微秒级耗时采样。
+
+Webman Horizon 提供了内置的无感消费者代理进程 `HorizonConsumerProcess`，**无需修改任何业务代码**，仅需调整一行配置即可全自动启用！
+
+修改主项目的消费者进程配置：`config/plugin/webman/redis-queue/process.php`：
 
 ```php
-use plugin\horizon\app\process\MetricsProcess;
-
 return [
-    'metrics' => [
-        'handler' => MetricsProcess::class,
-        'count' => 1, // 仅需启动 1 个维护进程
+    'consumer' => [
+        // 将原生的 Consumer::class 替换为 Horizon 提供的代理进程：
+        'handler' => plugin\horizon\app\process\HorizonConsumerProcess::class,
+        'count' => 8, // 消费者进程数
+        'constructor' => [
+            // 消费者类所在目录
+            'consumer_dir' => app_path() . '/queue/redis',
+        ],
     ],
+];
+```
+
+> **效果**：
+> 配置后，所有放在 `app/queue/redis/` 下的普通消费者在消费成功或失败时，都会被自动精确计时并上报给 Horizon，面板的**吞吐量折线图**与**实时每分钟作业数**将全自动绘制！
+
+---
+
+### 3. 可选方式：通过继承基类开发消费者
+
+如果不方便替换全局消费者进程配置，也可以让单个消费者类继承 Horizon 内置的 `BaseConsumer`，同样免写任何打点代码：
+
+```php
+namespace app\queue\redis;
+
+use plugin\horizon\app\service\BaseConsumer;
+
+class OrderConsumer extends BaseConsumer
+{
+    // 监听的队列名
+    public string $queue = 'order-process';
+
+    // 监听的 Redis 连接 (对应 redis-queue.php)
+    public string $connection = 'default';
+
+    /**
+     * 只需要实现 handle 方法，执行完毕会自动统计耗时与成功/失败指标
+     */
+    public function handle($data): void
+    {
+        // 编写纯业务逻辑
+        echo "正在处理订单: " . json_encode($data);
+    }
+}
+```
+
+---
+
+### 4. 静态资源配置文件 `plugin/horizon/config/static.php`
+
+应用插件的静态文件服务配置（HTML / CSS / JS 等打包产物）：
+
+```php
+return [
+    // 开启插件静态资源支持 (默认 true，否则访问静态资源会报 404)
+    'enable' => true,
+    'middleware' => [],
 ];
 ```
 
@@ -128,14 +195,14 @@ return [
 ```text
 plugin/horizon/
 ├── api/
-│   └── Install.php                  # 应用市场安装与卸载逻辑脚本
+│   └── Install.php                  # 应用市场与 Composer 安装/卸载联动脚本
 ├── app/
 │   ├── controller/                  # 应用控制器 (Index / Stats / Queue / FailedJob)
-│   ├── middleware/                  # 鉴权安全中间件
-│   ├── process/                     # 指标维护常驻进程
-│   ├── service/                     # QueueManager 队列核心服务 & MetricsCollector 指标收集器
+│   ├── middleware/                  # 鉴权安全中间件 (AuthMiddleware)
+│   ├── process/                     # 全局无感消费代理进程 (HorizonConsumerProcess)
+│   ├── service/                     # QueueManager 队列核心服务 & MetricsCollector 指标采集器
 │   └── functions.php                # 辅助函数库
-├── config/                          # 插件独立配置 (app.php / route.php / process.php)
+├── config/                          # 插件独立配置 (app.php / route.php / static.php)
 ├── public/                          # 预编译静态前端产物 (Webman 原生映射托管)
 ├── resources/                       # Vue 3 前端工程源码 (供二次开发与定制)
 ├── composer.json                    # Composer 与应用市场规范元信息
