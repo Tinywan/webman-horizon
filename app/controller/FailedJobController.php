@@ -42,6 +42,30 @@ class FailedJobController
     }
 
     /**
+     * 获取指定失败任务详情
+     */
+    public function show(Request $request, string $id): Response
+    {
+        $queue = (string) $request->get('queue', 'default');
+        $index = is_numeric($id) ? (int) $id : 0;
+
+        $job = $this->queueManager->getFailedJob($queue, $index);
+
+        if (!$job) {
+            return json([
+                'code' => 1,
+                'msg' => 'Failed job not found',
+            ]);
+        }
+
+        return json([
+            'code' => 0,
+            'msg' => 'ok',
+            'data' => $job,
+        ]);
+    }
+
+    /**
      * 重试单条任务
      */
     public function retry(Request $request): Response

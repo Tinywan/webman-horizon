@@ -234,4 +234,35 @@ class QueueManager
         $redis->lRem($failedKey, $raw, 1);
         return true;
     }
+
+    /**
+     * 获取单条失败任务详情
+     */
+    public function getFailedJob(string $queue, int $index): ?array
+    {
+        $redis = $this->redis();
+        $failedKey = "{$this->prefix}-failed:{$queue}";
+
+        $raw = $redis->lIndex($failedKey, $index);
+        if (!$raw) {
+            return null;
+        }
+
+        $decoded = json_decode($raw, true) ?: [];
+
+        return [
+            'id' => $decoded['id'] ?? $index,
+            'index' => $index,
+            'queue' => $queue,
+            'class' => $decoded['class'] ?? $decoded['data']['commandName'] ?? 'UnknownJob',
+            'payload' => $decoded,
+            'failed_at' => $decoded['failed_at'] ?? $decoded['time'] ?? null,
+            'exception' => $decoded['exception'] ?? $decoded['error'] ?? null,
+        ];
+    }
+
+    public function getPrefix(): string
+    {
+        return $this->prefix;
+    }
 }
