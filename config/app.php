@@ -10,6 +10,7 @@ declare(strict_types=1);
 
 return [
     'enable' => true,
+    'debug' => true,
     'path' => '/app/horizon', // 面板访问根路径
     'domain' => null,
 
