@@ -16,13 +16,27 @@ use support\Redis;
 class QueueManager
 {
     protected string $connection;
-    protected string $prefix;
+    protected string $waitingPrefix;
+    protected string $delayedKey;
+    protected string $failedKey;
 
     public function __construct(?string $connection = null, ?string $prefix = null)
     {
         $config = config('plugin.horizon.app.redis', []);
         $this->connection = $connection ?? $config['connection'] ?? 'default';
-        $this->prefix = $prefix ?? $config['prefix'] ?? 'redis-queue';
+
+        // 对齐 webman/redis-queue 底层 Client 常量定义:
+        // const QUEUE_WAITING = '{redis-queue}-waiting';
+        // const QUEUE_DELAYED = '{redis-queue}-delayed';
+        // const QUEUE_FAILED  = '{redis-queue}-failed';
+        $userPrefix = $prefix ?? $config['prefix'] ?? '';
+        if ($userPrefix && !str_ends_with($userPrefix, '-')) {
+            $userPrefix .= '-';
+        }
+
+        $this->waitingPrefix = $userPrefix . '{redis-queue}-waiting';
+        $this->delayedKey    = $userPrefix . '{redis-queue}-delayed';
+        $this->failedKey     = $userPrefix . '{redis-queue}-failed';
     }
 
     /**
@@ -51,21 +65,39 @@ class QueueManager
         $redis = $this->redis();
         $queues = [];
 
-        // 检索 waiting/delayed/failed 等 key
-        $patterns = [
-            "{$this->prefix}-waiting:*",
-            "{$this->prefix}-delayed:*",
-            "{$this->prefix}-failed:*",
-        ];
-
-        foreach ($patterns as $pattern) {
-            $keys = $redis->keys($pattern);
-            if (!empty($keys)) {
-                foreach ($keys as $key) {
-                    // 去除可能的前缀包装与命名空间
-                    if (preg_match('/(?:waiting|delayed|failed):(.+)$/', $key, $matches)) {
-                        $queues[$matches[1]] = true;
+        // 1. 扫描 waiting 队列: {redis-queue}-waiting*
+        $waitingKeys = $redis->keys($this->waitingPrefix . '*');
+        if (!empty($waitingKeys)) {
+            foreach ($waitingKeys as $key) {
+                // 提取队列名称
+                $pos = strpos($key, $this->waitingPrefix);
+                if ($pos !== false) {
+                    $queueName = substr($key, $pos + strlen($this->waitingPrefix));
+                    if ($queueName !== '') {
+                        $queues[$queueName] = true;
                     }
+                }
+            }
+        }
+
+        // 2. 从全局 delayed 队列中解析业务队列名 (扫描前 200 条延迟任务)
+        $delayedJobs = $redis->zRange($this->delayedKey, 0, 200);
+        if (!empty($delayedJobs)) {
+            foreach ($delayedJobs as $raw) {
+                $pkg = json_decode($raw, true);
+                if (!empty($pkg['queue'])) {
+                    $queues[$pkg['queue']] = true;
+                }
+            }
+        }
+
+        // 3. 从全局 failed 队列中解析业务队列名 (扫描前 200 条失败任务)
+        $failedJobs = $redis->lRange($this->failedKey, 0, 200);
+        if (!empty($failedJobs)) {
+            foreach ($failedJobs as $raw) {
+                $pkg = json_decode($raw, true);
+                if (!empty($pkg['queue'])) {
+                    $queues[$pkg['queue']] = true;
                 }
             }
         }
@@ -83,7 +115,7 @@ class QueueManager
      */
     public function getWaitingCount(string $queue): int
     {
-        return (int) $this->redis()->lLen("{$this->prefix}-waiting:{$queue}");
+        return (int) $this->redis()->lLen("{$this->waitingPrefix}{$queue}");
     }
 
     /**
@@ -91,7 +123,21 @@ class QueueManager
      */
     public function getDelayedCount(string $queue): int
     {
-        return (int) $this->redis()->zCard("{$this->prefix}-delayed:{$queue}");
+        $redis = $this->redis();
+        $allDelayed = $redis->zRange($this->delayedKey, 0, -1);
+        if (empty($allDelayed)) {
+            return 0;
+        }
+
+        $count = 0;
+        foreach ($allDelayed as $raw) {
+            $pkg = json_decode($raw, true);
+            if (isset($pkg['queue']) && $pkg['queue'] === $queue) {
+                $count++;
+            }
+        }
+
+        return $count;
     }
 
     /**
@@ -99,7 +145,21 @@ class QueueManager
      */
     public function getFailedCount(string $queue): int
     {
-        return (int) $this->redis()->lLen("{$this->prefix}-failed:{$queue}");
+        $redis = $this->redis();
+        $allFailed = $redis->lRange($this->failedKey, 0, -1);
+        if (empty($allFailed)) {
+            return 0;
+        }
+
+        $count = 0;
+        foreach ($allFailed as $raw) {
+            $pkg = json_decode($raw, true);
+            if (isset($pkg['queue']) && $pkg['queue'] === $queue) {
+                $count++;
+            }
+        }
+
+        return $count;
     }
 
     /**
@@ -107,12 +167,16 @@ class QueueManager
      */
     public function getQueueDetails(string $queue): array
     {
+        $waiting = $this->getWaitingCount($queue);
+        $delayed = $this->getDelayedCount($queue);
+        $failed = $this->getFailedCount($queue);
+
         return [
             'queue' => $queue,
-            'waiting' => $this->getWaitingCount($queue),
-            'delayed' => $this->getDelayedCount($queue),
-            'failed' => $this->getFailedCount($queue),
-            'total' => $this->getWaitingCount($queue) + $this->getDelayedCount($queue),
+            'waiting' => $waiting,
+            'delayed' => $delayed,
+            'failed' => $failed,
+            'total' => $waiting + $delayed,
         ];
     }
 
@@ -136,14 +200,36 @@ class QueueManager
      */
     public function clearQueue(string $queue, string $type = 'waiting'): bool
     {
-        $validTypes = ['waiting', 'delayed', 'failed'];
-        if (!in_array($type, $validTypes, true)) {
-            return false;
+        $redis = $this->redis();
+
+        if ($type === 'waiting') {
+            $redis->del("{$this->waitingPrefix}{$queue}");
+            return true;
         }
 
-        $key = "{$this->prefix}-{$type}:{$queue}";
-        $this->redis()->del($key);
-        return true;
+        if ($type === 'delayed') {
+            $items = $redis->zRange($this->delayedKey, 0, -1);
+            foreach ($items as $raw) {
+                $pkg = json_decode($raw, true);
+                if (isset($pkg['queue']) && $pkg['queue'] === $queue) {
+                    $redis->zRem($this->delayedKey, $raw);
+                }
+            }
+            return true;
+        }
+
+        if ($type === 'failed') {
+            $items = $redis->lRange($this->failedKey, 0, -1);
+            foreach ($items as $raw) {
+                $pkg = json_decode($raw, true);
+                if (isset($pkg['queue']) && $pkg['queue'] === $queue) {
+                    $redis->lRem($this->failedKey, $raw, 1);
+                }
+            }
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -152,28 +238,27 @@ class QueueManager
     public function getFailedJobs(string $queue = 'default', int $page = 1, int $pageSize = 15): array
     {
         $redis = $this->redis();
-        $key = "{$this->prefix}-failed:{$queue}";
+        $allFailed = $redis->lRange($this->failedKey, 0, -1);
 
-        $total = (int) $redis->lLen($key);
-        $start = ($page - 1) * $pageSize;
-        $end = $start + $pageSize - 1;
-
-        $items = [];
-        if ($total > 0 && $start < $total) {
-            $rawList = $redis->lRange($key, $start, $end);
-            foreach ($rawList as $index => $raw) {
-                $decoded = json_decode($raw, true) ?: [];
-                $items[] = [
-                    'id' => $decoded['id'] ?? ($start + $index),
-                    'index' => $start + $index,
-                    'queue' => $queue,
+        $filtered = [];
+        foreach ($allFailed as $index => $raw) {
+            $decoded = json_decode($raw, true) ?: [];
+            if (empty($queue) || (isset($decoded['queue']) && $decoded['queue'] === $queue)) {
+                $filtered[] = [
+                    'id' => $decoded['id'] ?? (string) $index,
+                    'index' => $index,
+                    'queue' => $decoded['queue'] ?? $queue,
                     'class' => $decoded['class'] ?? $decoded['data']['commandName'] ?? 'UnknownJob',
                     'payload' => $decoded,
-                    'failed_at' => $decoded['failed_at'] ?? $decoded['time'] ?? null,
-                    'exception' => $decoded['exception'] ?? $decoded['error'] ?? null,
+                    'failed_at' => isset($decoded['time']) ? date('Y-m-d H:i:s', (int) $decoded['time']) : null,
+                    'exception' => $decoded['error'] ?? $decoded['exception'] ?? null,
                 ];
             }
         }
+
+        $total = count($filtered);
+        $start = ($page - 1) * $pageSize;
+        $items = array_slice($filtered, $start, $pageSize);
 
         return [
             'total' => $total,
@@ -189,18 +274,19 @@ class QueueManager
     public function retryFailedJob(string $queue, int $index): bool
     {
         $redis = $this->redis();
-        $failedKey = "{$this->prefix}-failed:{$queue}";
-        $waitingKey = "{$this->prefix}-waiting:{$queue}";
-
-        $raw = $redis->lIndex($failedKey, $index);
+        $raw = $redis->lIndex($this->failedKey, $index);
         if (!$raw) {
             return false;
         }
 
-        // 推回 waiting 队列
+        $pkg = json_decode($raw, true);
+        $targetQueue = $pkg['queue'] ?? $queue;
+        $waitingKey = "{$this->waitingPrefix}{$targetQueue}";
+
+        // 推回对应 waiting 队列
         $redis->rPush($waitingKey, $raw);
-        // 从 failed 队列删除此任务
-        $redis->lRem($failedKey, $raw, 1);
+        // 从全局 failed 队列删除此项
+        $redis->lRem($this->failedKey, $raw, 1);
 
         return true;
     }
@@ -211,17 +297,17 @@ class QueueManager
     public function retryAllFailedJobs(string $queue): int
     {
         $redis = $this->redis();
-        $failedKey = "{$this->prefix}-failed:{$queue}";
-        $waitingKey = "{$this->prefix}-waiting:{$queue}";
+        $allFailed = $redis->lRange($this->failedKey, 0, -1);
 
         $count = 0;
-        while (true) {
-            $job = $redis->rPop($failedKey);
-            if (!$job) {
-                break;
+        foreach ($allFailed as $raw) {
+            $pkg = json_decode($raw, true);
+            if (isset($pkg['queue']) && $pkg['queue'] === $queue) {
+                $waitingKey = "{$this->waitingPrefix}{$queue}";
+                $redis->rPush($waitingKey, $raw);
+                $redis->lRem($this->failedKey, $raw, 1);
+                $count++;
             }
-            $redis->rPush($waitingKey, $job);
-            $count++;
         }
 
         return $count;
@@ -233,14 +319,12 @@ class QueueManager
     public function deleteFailedJob(string $queue, int $index): bool
     {
         $redis = $this->redis();
-        $failedKey = "{$this->prefix}-failed:{$queue}";
-
-        $raw = $redis->lIndex($failedKey, $index);
+        $raw = $redis->lIndex($this->failedKey, $index);
         if (!$raw) {
             return false;
         }
 
-        $redis->lRem($failedKey, $raw, 1);
+        $redis->lRem($this->failedKey, $raw, 1);
         return true;
     }
 
@@ -250,9 +334,7 @@ class QueueManager
     public function getFailedJob(string $queue, int $index): ?array
     {
         $redis = $this->redis();
-        $failedKey = "{$this->prefix}-failed:{$queue}";
-
-        $raw = $redis->lIndex($failedKey, $index);
+        $raw = $redis->lIndex($this->failedKey, $index);
         if (!$raw) {
             return null;
         }
@@ -260,18 +342,13 @@ class QueueManager
         $decoded = json_decode($raw, true) ?: [];
 
         return [
-            'id' => $decoded['id'] ?? $index,
+            'id' => $decoded['id'] ?? (string) $index,
             'index' => $index,
-            'queue' => $queue,
+            'queue' => $decoded['queue'] ?? $queue,
             'class' => $decoded['class'] ?? $decoded['data']['commandName'] ?? 'UnknownJob',
             'payload' => $decoded,
-            'failed_at' => $decoded['failed_at'] ?? $decoded['time'] ?? null,
-            'exception' => $decoded['exception'] ?? $decoded['error'] ?? null,
+            'failed_at' => isset($decoded['time']) ? date('Y-m-d H:i:s', (int) $decoded['time']) : null,
+            'exception' => $decoded['error'] ?? $decoded['exception'] ?? null,
         ];
-    }
-
-    public function getPrefix(): string
-    {
-        return $this->prefix;
     }
 }
