@@ -10,6 +10,7 @@ declare(strict_types=1);
 
 namespace plugin\horizon\app\service;
 
+use Webman\RedisQueue\Redis as QueueRedis;
 use support\Redis;
 
 class MetricsCollector
@@ -25,7 +26,15 @@ class MetricsCollector
 
     protected function redis()
     {
-        return Redis::connection($this->connection);
+        if (class_exists(QueueRedis::class)) {
+            return QueueRedis::connection($this->connection);
+        }
+
+        if (class_exists(Redis::class)) {
+            return Redis::connection($this->connection);
+        }
+
+        throw new \RuntimeException('Neither Webman\RedisQueue\Redis nor support\Redis found.');
     }
 
     /**
