@@ -1,10 +1,6 @@
 # Webman Horizon (Redis 队列监控面板)
 
 <p align="center">
-  <img src="https://laravel.com/img/docs/horizon-example.png" alt="Webman Horizon" width="800">
-</p>
-
-<p align="center">
   <a href="https://packagist.org/packages/tinywan/webman-horizon"><img src="https://img.shields.io/packagist/v/tinywan/webman-horizon?color=blue&label=version" alt="Latest Version"></a>
   <a href="https://php.net"><img src="https://img.shields.io/badge/php-%3E%3D8.2-8892BF.svg" alt="PHP Version"></a>
   <a href="https://www.workerman.net/doc/webman/app/app.html"><img src="https://img.shields.io/badge/webman-app--plugin-success.svg" alt="Webman App Plugin"></a>
@@ -17,7 +13,6 @@
 
 严格遵循 [Webman 官方应用插件（App Plugin）开发规范](https://www.workerman.net/doc/webman/app/app.html)，拥有独立完整的命名空间、路由、控制器、中间件、自定义常驻维护进程与静态资源体系。像搭建积木一样即插即用，**开箱即用，零前端构建依赖**。
 
----
 
 ## 核心特性
 
@@ -33,7 +28,6 @@
   - 访问路径：`/app/horizon`（官方推荐规范）
   - 提供 `api/Install.php`，支持接入 Webman 官方应用市场一键安装与卸载。
 
----
 
 ## 依赖环境
 
@@ -41,7 +35,6 @@
 - Workerman / Webman Framework >= 1.4 / 2.0
 - [webman/redis-queue](https://github.com/webman-php/redis-queue) >= 1.0
 
----
 
 ## 安装与使用
 
@@ -73,7 +66,6 @@ php windows.php
 http://127.0.0.1:8787/app/horizon
 ```
 
----
 
 ## 核心配置说明
 
@@ -115,7 +107,6 @@ return [
 ];
 ```
 
----
 
 ### 2. 开启 100% 全局无感吞吐量与耗时统计（强烈推荐）
 
@@ -142,7 +133,6 @@ return [
 > **效果**：
 > 配置后，所有放在 `app/queue/redis/` 下的普通消费者在消费成功或失败时，都会被自动精确计时并上报给 Horizon，面板的**吞吐量折线图**与**实时每分钟作业数**将全自动绘制！
 
----
 
 ### 3. 可选方式：通过继承基类开发消费者
 
@@ -172,7 +162,6 @@ class OrderConsumer extends BaseConsumer
 }
 ```
 
----
 
 ### 4. 静态资源配置文件 `plugin/horizon/config/static.php`
 
@@ -186,7 +175,6 @@ return [
 ];
 ```
 
----
 
 ## 插件应用规范与目录结构
 
@@ -209,7 +197,6 @@ plugin/horizon/
 └── README.md
 ```
 
----
 
 ## 本地快速体验与二次开发
 
@@ -241,7 +228,6 @@ composer run format:check
 composer run lint
 ```
 
----
 
 ## 开源协议
 
