@@ -15,11 +15,7 @@ use plugin\horizon\app\controller\StatsController;
 use plugin\horizon\app\middleware\AuthMiddleware;
 use Webman\Route;
 
-// 1. 监控面板 SPA 页面入口及前端子路由支持
-Route::get('/app/horizon', [IndexController::class, 'index']);
-Route::get('/app/horizon/{path:.+}', [IndexController::class, 'index']);
-
-// 2. 监控面板后端 RESTful API
+// 1. 监控面板后端 RESTful API（必须先于 SPA 通配路由注册，避免被遮蔽）
 Route::group('/app/horizon/api', function () {
     // 总体指标统计
     Route::get('/stats', [StatsController::class, 'stats']);
@@ -41,3 +37,7 @@ Route::group('/app/horizon/api', function () {
 })->middleware([
     AuthMiddleware::class,
 ]);
+
+// 2. 监控面板 SPA 页面入口及前端子路由支持（必须排除 api 前缀，避免遮蔽 API 路由）
+Route::get('/app/horizon', [IndexController::class, 'index']);
+Route::get('/app/horizon/{path:^(?!api/).*$}', [IndexController::class, 'index']);
